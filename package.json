@@ -1,0 +1,32 @@
+{
+  "name": "hot-plugin",
+  "version": "1.0.0",
+  "description": "High On Tokens - Multi-account GitHub Copilot aggregator plugin for OpenCode",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "setup": "tsx setup-hot.ts",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "hot",
+    "copilot",
+    "github",
+    "opencode",
+    "plugin",
+    "multi-account",
+    "tokens"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "node-fetch": "^2.6.11"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/node-fetch": "^2.6.13",
+    "tsx": "^4.0.0",
+    "typescript": "^5.0.0"
+  }
+}
