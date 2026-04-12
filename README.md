@@ -1,12 +1,6 @@
 # HOT — High On Tokens
 
-OpenCode plugin that lets you use GitHub Copilot from another account. When your quota runs out, it automatically rotates to the next account. 
-
----
-
-## How it works
-
-You generate a Copilot-scoped token from any GitHub account that has Copilot active. HOT injects that token into every OpenCode request instead of your own credentials. Add multiple accounts and it rotates between them on failure.
+OpenCode plugin that lets you use GitHub Copilot through any account. Add multiple accounts and switch between them directly from the chat.
 
 ---
 
@@ -20,109 +14,63 @@ You generate a Copilot-scoped token from any GitHub account that has Copilot act
 
 ## Setup
 
-**1. Clone and build**
+**1. Install the plugin**
 
 ```bash
-git clone https://github.com/ZaynIkhlaq/hot-plugin
-cd hot-plugin
-npm install
-npm run build
+npx hot-oc-plugin
 ```
 
-**2. Get a Copilot token from the target account**
+This installs the plugin globally and registers it with OpenCode automatically.
 
-Run this (on any machine, logged into the target GitHub account in browser):
+**2. Restart OpenCode**
 
-```bash
-curl -s -X POST "https://github.com/login/device/code" -H "Accept: application/json" -H "Content-Type: application/x-www-form-urlencoded" --data-urlencode "client_id=Iv1.b507a08c87ecfe98" --data-urlencode "scope=read:user"
-```
+**3. Add your first account**
 
-You'll get back something like:
-```json
-{"device_code":"...","user_code":"XXXX-XXXX","verification_uri":"https://github.com/login/device",...}
-```
+Inside OpenCode, just say:
 
-Go to **https://github.com/login/device**, log in as the target account, enter the `user_code`.
+> "Add a Copilot account"
 
-Then poll for the token:
-```bash
-curl -s -X POST "https://github.com/login/oauth/access_token" -H "Accept: application/json" -H "Content-Type: application/x-www-form-urlencoded" --data-urlencode "client_id=Iv1.b507a08c87ecfe98" --data-urlencode "device_code=YOUR_DEVICE_CODE" --data-urlencode "grant_type=urn:ietf:params:oauth:grant-type:device_code"
-```
+The plugin will open GitHub in your browser and show you a code to enter. Log in as the GitHub account you want to add, enter the code, and authorize it. Once done, tell OpenCode you're finished and it'll save the account automatically.
 
-You'll get a `ghu_*` token. That's what you need.
-
-**3. Add the account**
-
-```bash
-npm run setup
-```
-
-It'll ask for:
-- A nickname for the account (e.g. `friend1`)
-- The `ghu_*` token
-- A rotation threshold (how many requests before switching — enter `0` to only rotate on failure)
-
-Repeat for each account you want to add.
-
-Config is saved to `~/.config/opencode/hot.json` with `chmod 600`.
-
-**4. Enable the plugin in OpenCode**
-
-Add this to `~/.config/opencode/opencode.json` (create it if it doesn't exist):
-
-```json
-{
-  "plugin": ["file:///absolute/path/to/hot-plugin/dist/index.js"]
-}
-```
-
-**5. Restart OpenCode**
-
-You'll see this in the logs on startup:
-```
-[HOT] Ready — 2 account(s), active: friend1
-```
-
-Every Copilot request now uses the token you configured. When an account fails or hits its threshold, it silently rotates to the next one and logs:
-```
-[HOT] friend1 → friend2 (auth failure)
-```
+That's it.
 
 ---
 
-## Adding more accounts
+## Managing accounts
 
-Just re-run setup:
-```bash
-npm run setup
-```
+Everything is done through chat — just ask naturally:
 
-It'll show existing accounts and let you add more. Rotation is round-robin.
+| What you say | What happens |
+|---|---|
+| "Add a Copilot account" | Start adding a new account |
+| "Switch to friend1" | Switch the active account |
+| "Which account am I using?" | See all accounts and which is active |
+| "Remove account 2" | Remove an account |
 
 ---
 
 ## Notes
 
-- Tokens are stored in plain text at `~/.config/opencode/hot.json` (owner-read-only, same as `gh` CLI)
-- The `ghu_*` token is long-lived but the internal Copilot bearer token it generates expires every 30 minutes — HOT handles refresh automatically
-- Student Plan Copilot (`free_educational_quota`) works fine
-- You need to redo the device flow if the `ghu_*` token gets revoked
+- Tokens are stored at `~/.config/opencode/hot.json` (owner-read-only)
+- The GitHub token is long-lived but the internal Copilot bearer token it generates expires every 30 minutes — OpenCode handles the refresh automatically
+- Student Plan Copilot works fine
+- If a token gets revoked, just remove the account and add it again
 
 ---
 
 ## Credits
 
-- [Ahsan Riaz](https://github.com/AhsanRiaz786)
-- [Muhammad Faizan Anwar](https://github.com/m-faizananwar) 
- 
+- [Samama Osman](https://github.com/Samama251251)
+- [Muhammad Faizan Anwar](https://github.com/m-faizananwar)
+
 ---
 
 ## License
 
 MIT
 
+---
+
 ## Yap
 
-As far as I'm aware, using Opencode with the models provided with the Github Student plan is probably the way to go if you want to use the best models+limits that money *can't* buy. 
-There may be better hacks out there (please ping me if you know something better)
-
+As far as I'm aware, using OpenCode with the models provided through the GitHub Student Plan is probably the best way to use the best models and limits that money can't buy. There may be better hacks out there — ping me if you know one.

@@ -1,15 +1,20 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs"
 import { homedir } from "node:os"
 import { join } from "node:path"
+import { execSync } from "node:child_process"
 import type { Plugin } from "@opencode-ai/plugin"
+import { tool } from "@opencode-ai/plugin"
 
-// ─── Config ─────────────────────────────────────────────────────────────────
+const z = tool.schema
+
+// ─── Config ──────────────────────────────────────────────────────────────────
+
+// Must match OpenCode's OAuth app so tokens work with its Copilot provider
+const OPENCODE_CLIENT_ID = "Ov23li8tweQw6odWQebz"
 
 interface Account {
   name: string
-  token: string        // GitHub OAuth token (gho_*, ghu_*, github_pat_*)
-  requestsUsed: number
-  threshold: number    // rotate proactively at this count (0 = only on failure)
+  token: string
 }
 
 interface Config {
@@ -19,15 +24,10 @@ interface Config {
 
 const CONFIG_DIR = join(homedir(), ".config", "opencode")
 const CONFIG_PATH = join(CONFIG_DIR, "hot.json")
+const AUTH_PATH = join(homedir(), ".local", "share", "opencode", "auth.json")
 
 function readConfig(): Config {
-  if (!existsSync(CONFIG_PATH)) {
-    throw new Error(
-      `[HOT] No accounts configured.\n` +
-      `  Run: npm run setup\n` +
-      `  Config path: ${CONFIG_PATH}`
-    )
-  }
+  if (!existsSync(CONFIG_PATH)) return { accounts: [], current: 0 }
   return JSON.parse(readFileSync(CONFIG_PATH, "utf8")) as Config
 }
 
@@ -36,48 +36,14 @@ function writeConfig(cfg: Config): void {
   writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2), { mode: 0o600 })
 }
 
-// ─── Bearer Token Cache ──────────────────────────────────────────────────────
-
-interface CachedBearer {
-  token: string
-  expiresAt: number  // ms epoch
-}
-
-const bearerCache = new Map<string, CachedBearer>()
-
-async function getBearerToken(githubToken: string): Promise<string> {
-  const cached = bearerCache.get(githubToken)
-  // Refresh 2 minutes before expiry to avoid mid-request expiry
-  if (cached && cached.expiresAt > Date.now() + 120_000) {
-    return cached.token
+function syncAuthJson(token: string): void {
+  let existing: Record<string, unknown> = {}
+  if (existsSync(AUTH_PATH)) {
+    try { existing = JSON.parse(readFileSync(AUTH_PATH, "utf8")) } catch {}
   }
-
-  const res = await fetch("https://api.github.com/copilot_internal/v2/token", {
-    method: "GET",
-    headers: {
-      Authorization: `token ${githubToken}`,
-      Accept: "application/json",
-      "Editor-Version": "vscode/1.95.0",
-      "Editor-Plugin-Version": "copilot/1.155.0",
-      "Openai-Organization": "github-copilot",
-      "User-Agent": "GithubCopilot/1.155.0",
-    },
-  })
-
-  if (res.status === 401) throw new Error(`token invalid or expired`)
-  if (res.status === 403) throw new Error(`token does not have Copilot access`)
-  if (!res.ok) throw new Error(`HTTP ${res.status} from GitHub token endpoint`)
-
-  const data = await res.json() as { token: string; expires_at: number }
-  bearerCache.set(githubToken, {
-    token: data.token,
-    expiresAt: data.expires_at * 1000,
-  })
-  return data.token
-}
-
-function invalidateBearerCache(githubToken: string): void {
-  bearerCache.delete(githubToken)
+  existing["github-copilot"] = { type: "oauth", access: token, refresh: token, expires: 0 }
+  mkdirSync(join(homedir(), ".local", "share", "opencode"), { recursive: true })
+  writeFileSync(AUTH_PATH, JSON.stringify(existing, null, 2), { mode: 0o600 })
 }
 
 // ─── Account Pool ─────────────────────────────────────────────────────────────
@@ -85,103 +51,242 @@ function invalidateBearerCache(githubToken: string): void {
 class AccountPool {
   private cfg: Config
 
-  constructor(cfg: Config) {
-    this.cfg = cfg
+  constructor(cfg: Config) { this.cfg = cfg }
+
+  get count(): number { return this.cfg.accounts.length }
+  get currentIndex(): number { return this.cfg.current % Math.max(this.cfg.accounts.length, 1) }
+  get current(): Account | undefined { return this.cfg.accounts[this.currentIndex] }
+  get all(): Account[] { return this.cfg.accounts }
+
+  activate(): void {
+    if (!this.current) return
+    syncAuthJson(this.current.token)
+    console.log(`[HOT] Active: ${this.current.name} (${this.count} account(s) configured)`)
   }
 
-  get count(): number {
-    return this.cfg.accounts.length
-  }
-
-  get current(): Account {
-    return this.cfg.accounts[this.cfg.current % this.cfg.accounts.length]!
-  }
-
-  rotate(reason: string): Account {
-    const prev = this.current.name
-    this.cfg.current = (this.cfg.current + 1) % this.cfg.accounts.length
+  switchTo(index: number): void {
+    const prev = this.current?.name ?? "none"
+    this.cfg.current = index
     writeConfig(this.cfg)
-    console.log(`[HOT] ${prev} → ${this.current.name} (${reason})`)
-    return this.current
+    syncAuthJson(this.current!.token)
+    console.log(`[HOT] Switched: ${prev} → ${this.current!.name}`)
   }
 
-  incrementAndMaybeRotate(): void {
-    this.current.requestsUsed++
-    writeConfig(this.cfg)
-    const { threshold, requestsUsed, name } = this.current
-    if (threshold > 0 && requestsUsed >= threshold) {
-      invalidateBearerCache(this.current.token)
-      this.rotate(`threshold ${threshold} hit on ${name}`)
+  addAccount(name: string, token: string): void {
+    this.cfg.accounts.push({ name, token })
+    if (this.cfg.accounts.length === 1) {
+      this.cfg.current = 0
+      syncAuthJson(token)
     }
+    writeConfig(this.cfg)
+    console.log(`[HOT] Added account: ${name}`)
   }
+
+  removeAccount(index: number): string {
+    const [removed] = this.cfg.accounts.splice(index, 1)
+    if (this.cfg.current >= this.cfg.accounts.length) this.cfg.current = 0
+    writeConfig(this.cfg)
+    if (this.current) syncAuthJson(this.current.token)
+    return removed!.name
+  }
+
+  statusSummary(): string {
+    if (this.cfg.accounts.length === 0) {
+      return "No accounts configured. Say \"add a Copilot account\" to get started."
+    }
+    return [
+      `Active account: ${this.current?.name ?? "none"} (${this.currentIndex + 1} of ${this.count})`,
+      ``,
+      `All accounts:`,
+      ...this.all.map((a, i) => {
+        const marker = i === this.currentIndex ? " ◀ active" : ""
+        return `  [${i + 1}] ${a.name}${marker}`
+      }),
+    ].join("\n")
+  }
+}
+
+// ─── GitHub Device Flow ───────────────────────────────────────────────────────
+
+interface DeviceFlowStart {
+  device_code: string
+  user_code: string
+  verification_uri: string
+  interval: number
+  expires_in: number
+}
+
+async function startDeviceFlow(): Promise<DeviceFlowStart> {
+  const res = await fetch("https://github.com/login/device/code", {
+    method: "POST",
+    headers: { Accept: "application/json", "Content-Type": "application/x-www-form-urlencoded" },
+    body: `client_id=${OPENCODE_CLIENT_ID}&scope=read:user`,
+  })
+  if (!res.ok) throw new Error(`GitHub responded with HTTP ${res.status}`)
+  return res.json() as Promise<DeviceFlowStart>
+}
+
+async function pollForToken(device_code: string, intervalSecs: number, expiresSecs: number): Promise<string> {
+  const deadline = Date.now() + expiresSecs * 1000
+  let pollMs = (intervalSecs + 3) * 1000
+
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, pollMs))
+    const res = await fetch("https://github.com/login/oauth/access_token", {
+      method: "POST",
+      headers: { Accept: "application/json", "Content-Type": "application/x-www-form-urlencoded" },
+      body: `client_id=${OPENCODE_CLIENT_ID}&device_code=${device_code}&grant_type=urn:ietf:params:oauth:grant-type:device_code`,
+    })
+    const data = await res.json() as { access_token?: string; error?: string; interval?: number }
+
+    if (data.access_token) return data.access_token
+    if (data.error === "slow_down") pollMs += (data.interval ?? 5) * 1000
+    else if (data.error === "expired_token") throw new Error("Code expired. Say \"add account\" to start over.")
+    else if (data.error === "access_denied") throw new Error("Authorization was denied.")
+    else if (data.error !== "authorization_pending") throw new Error(`Unexpected error: ${data.error}`)
+  }
+
+  throw new Error("Timed out waiting for authorization. Say \"add account\" to start over.")
+}
+
+async function validateCopilot(token: string): Promise<string> {
+  const userRes = await fetch("https://api.github.com/user", {
+    headers: { Authorization: `token ${token}`, Accept: "application/vnd.github+json" },
+  })
+  if (!userRes.ok) throw new Error(`GitHub returned HTTP ${userRes.status}`)
+  const { login } = await userRes.json() as { login: string }
+
+  const copilotRes = await fetch("https://api.github.com/copilot_internal/v2/token", {
+    headers: {
+      Authorization: `token ${token}`,
+      Accept: "application/json",
+      "Editor-Version": "vscode/1.95.0",
+      "Editor-Plugin-Version": "copilot/1.155.0",
+      "User-Agent": "GithubCopilot/1.155.0",
+    },
+  })
+  if (!copilotRes.ok) {
+    throw new Error(`@${login} does not have Copilot access. Enable it at github.com/settings/copilot`)
+  }
+  return login
+}
+
+function openBrowser(url: string): void {
+  try {
+    const cmd = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open"
+    execSync(`${cmd} "${url}"`, { stdio: "ignore" })
+  } catch {}
 }
 
 // ─── Plugin ──────────────────────────────────────────────────────────────────
 
 export const server: Plugin = async () => {
-  let pool: AccountPool
+  const pool = new AccountPool(readConfig())
+  pool.activate()
 
-  try {
-    pool = new AccountPool(readConfig())
-    console.log(
-      `[HOT] Ready — ${pool.count} account(s), active: ${pool.current.name}`
-    )
-  } catch (err) {
-    console.error((err as Error).message)
-    // Return empty hooks so OpenCode continues without the plugin crashing
-    return {}
-  }
+  // Pending device flow state (lives in memory between hot_add and hot_complete)
+  let pending: { device_code: string; interval: number; expires_in: number; name: string } | null = null
 
   return {
-    /**
-     * Runs on every outbound LLM request.
-     * We check if the provider is GitHub Copilot and, if so, inject
-     * the current account's bearer token into the Authorization header.
-     */
-    "chat.headers": async (input, output) => {
-      const providerID: string = input.provider?.info?.id ?? ""
-      if (!isCopilotProvider(providerID)) return
+    tool: {
+      hot_status: tool({
+        description: "Shows which GitHub Copilot account HOT is currently using and all configured accounts.",
+        args: {},
+        execute: async () => pool.statusSummary(),
+      }),
 
-      const acc = pool.current
+      hot_add: tool({
+        description: "Start adding a new GitHub Copilot account. Opens GitHub in the browser and shows a code to enter. After authorizing in the browser, call hot_complete to finish.",
+        args: {
+          name: z.string().describe("A short nickname for this account, e.g. 'friend1' or 'zain'."),
+        },
+        execute: async ({ name }) => {
+          if (pool.all.find((a) => a.name === name)) {
+            return `An account named "${name}" already exists. Use a different name or remove it first with hot_remove.`
+          }
 
-      try {
-        const bearer = await getBearerToken(acc.token)
-        output.headers["Authorization"] = `Bearer ${bearer}`
-        pool.incrementAndMaybeRotate()
-      } catch (err) {
-        // Current account failed auth — rotate and try next immediately
-        console.error(`[HOT] ${acc.name} auth failed: ${(err as Error).message}`)
-        invalidateBearerCache(acc.token)
-        const next = pool.rotate(`auth failure`)
+          const flow = await startDeviceFlow()
+          pending = { device_code: flow.device_code, interval: flow.interval, expires_in: flow.expires_in, name }
+          openBrowser(flow.verification_uri)
 
-        try {
-          const bearer = await getBearerToken(next.token)
-          output.headers["Authorization"] = `Bearer ${bearer}`
-          pool.incrementAndMaybeRotate()
-        } catch (err2) {
-          console.error(`[HOT] ${next.name} also failed: ${(err2 as Error).message}`)
-          // Fall through — let OpenCode use whatever default auth it has
-        }
-      }
+          return [
+            `GitHub opened in your browser. If it didn't open, go to: ${flow.verification_uri}`,
+            ``,
+            `Enter this code: **${flow.user_code}**`,
+            ``,
+            `Log in as the GitHub account you want to add (must have Copilot enabled), then authorize the app. Once done, say "complete" and I'll finish adding the account.`,
+          ].join("\n")
+        },
+      }),
+
+      hot_complete: tool({
+        description: "Complete adding a GitHub Copilot account after the user has authorized in the browser. Call this after hot_add once the user confirms they've done the browser step.",
+        args: {},
+        execute: async () => {
+          if (!pending) {
+            return `No account setup in progress. Say "add a Copilot account" to start.`
+          }
+
+          const { device_code, interval, expires_in, name } = pending
+
+          const token = await pollForToken(device_code, interval, expires_in)
+          const username = await validateCopilot(token)
+          pool.addAccount(name, token)
+          pending = null
+
+          return `✓ Account "${name}" (@${username}) added successfully. ${pool.count > 1 ? `Use hot_switch to change accounts.` : `It's now active.`}`
+        },
+      }),
+
+      hot_switch: tool({
+        description: "Switch the active GitHub Copilot account. Pass the account name or number (1-based index).",
+        args: {
+          account: z.string().describe("Account name or 1-based index number to switch to."),
+        },
+        execute: async ({ account }) => {
+          if (pool.count === 0) return `No accounts configured. Say "add a Copilot account" to get started.`
+
+          const idx = parseInt(account, 10)
+          const target = !isNaN(idx) ? idx - 1 : pool.all.findIndex((a) => a.name === account)
+
+          if (target < 0 || target >= pool.count) {
+            return `Unknown account "${account}".\n\n${pool.statusSummary()}`
+          }
+
+          pool.switchTo(target)
+          return `Switched to "${pool.current!.name}". Copilot requests will now use this account.`
+        },
+      }),
+
+      hot_remove: tool({
+        description: "Remove a GitHub Copilot account from HOT.",
+        args: {
+          account: z.string().describe("Account name or 1-based index number to remove."),
+        },
+        execute: async ({ account }) => {
+          if (pool.count === 0) return `No accounts configured.`
+
+          const idx = parseInt(account, 10)
+          const target = !isNaN(idx) ? idx - 1 : pool.all.findIndex((a) => a.name === account)
+
+          if (target < 0 || target >= pool.count) {
+            return `Unknown account "${account}".\n\n${pool.statusSummary()}`
+          }
+
+          const removed = pool.removeAccount(target)
+          const after = pool.count > 0 ? ` Active account is now "${pool.current!.name}".` : ` No accounts remain.`
+          return `Removed "${removed}".${after}`
+        },
+      }),
     },
 
-    /**
-     * Listen for session.error events carrying a ProviderAuthError so we can
-     * rotate on 429 / auth failures that happen at the transport layer.
-     */
-    event: async ({ event }) => {
-      if (event.type !== "session.error") return
-
-      const err = event.properties.error
-      if (!err || err.name !== "ProviderAuthError") return
-      if (!isCopilotProvider(err.data.providerID)) return
-
-      invalidateBearerCache(pool.current.token)
-      pool.rotate(`ProviderAuthError on ${pool.current.name}`)
+    // Inject active account into session context so the AI always knows
+    "experimental.chat.system.transform": async (_input, output) => {
+      if (!pool.current) return
+      output.system.push(
+        `[HOT] GitHub Copilot is routing through account: "${pool.current.name}". ` +
+        `Use hot_switch to change accounts, hot_status to see all.`
+      )
     },
   }
-}
-
-function isCopilotProvider(id: string): boolean {
-  return id.toLowerCase().includes("copilot") || id === "github-copilot"
 }

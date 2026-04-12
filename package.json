@@ -1,25 +1,27 @@
 {
-  "name": "hot-plugin",
+  "name": "hot-oc-plugin",
   "version": "1.0.0",
-  "description": "HOT - Multi-account GitHub Copilot token rotation plugin for OpenCode",
+  "description": "HOT - Multi-account GitHub Copilot plugin for OpenCode",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
     ".": "./dist/index.js"
   },
+  "bin": {
+    "hot-oc-plugin": "dist/install.js"
+  },
   "scripts": {
-    "build": "tsc",
-    "setup": "tsx src/setup.ts"
+    "build": "tsc && chmod +x dist/install.js"
   },
   "keywords": ["opencode", "copilot", "github", "plugin"],
   "license": "MIT",
   "dependencies": {
-    "@opencode-ai/plugin": "latest"
+    "@opencode-ai/plugin": "latest",
+    "zod": "^4.0.0"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
-    "tsx": "^4.0.0",
     "typescript": "^5.0.0"
   }
 }
