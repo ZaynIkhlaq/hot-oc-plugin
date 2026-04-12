@@ -155,19 +155,6 @@ async function validateCopilot(token: string): Promise<string> {
   })
   if (!userRes.ok) throw new Error(`GitHub returned HTTP ${userRes.status}`)
   const { login } = await userRes.json() as { login: string }
-
-  const copilotRes = await fetch("https://api.github.com/copilot_internal/v2/token", {
-    headers: {
-      Authorization: `token ${token}`,
-      Accept: "application/json",
-      "Editor-Version": "vscode/1.95.0",
-      "Editor-Plugin-Version": "copilot/1.155.0",
-      "User-Agent": "GithubCopilot/1.155.0",
-    },
-  })
-  if (!copilotRes.ok) {
-    throw new Error(`@${login} does not have Copilot access. Enable it at github.com/settings/copilot`)
-  }
   return login
 }
 
@@ -196,7 +183,7 @@ export const server: Plugin = async () => {
       }),
 
       hot_add: tool({
-        description: "Start adding a new GitHub Copilot account. Opens GitHub in the browser and shows a code to enter. After authorizing in the browser, call hot_complete to finish.",
+        description: "Start adding a new GitHub Copilot account. Provides a link and code to enter. After authorizing in the browser, call hot_complete to finish.",
         args: {
           name: z.string().describe("A short nickname for this account, e.g. 'friend1' or 'zain'."),
         },
@@ -207,14 +194,13 @@ export const server: Plugin = async () => {
 
           const flow = await startDeviceFlow()
           pending = { device_code: flow.device_code, interval: flow.interval, expires_in: flow.expires_in, name }
-          openBrowser(flow.verification_uri)
 
           return [
-            `GitHub opened in your browser. If it didn't open, go to: ${flow.verification_uri}`,
+            `Use this link to log in: ${flow.verification_uri}`,
             ``,
             `Enter this code: **${flow.user_code}**`,
             ``,
-            `Log in as the GitHub account you want to add (must have Copilot enabled), then authorize the app. Once done, say "complete" and I'll finish adding the account.`,
+            `They should log in with a GitHub account that has Copilot enabled, then authorize the app. Once they are done, tell me "complete" and I'll finish adding the account.`,
           ].join("\n")
         },
       }),
