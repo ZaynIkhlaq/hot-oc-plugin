@@ -60,8 +60,8 @@ Everything is done through chat — just ask naturally:
 
 ## Credits
 
-- [Samama Osman](https://github.com/Samama251251)
-- [Muhammad Faizan Anwar](https://github.com/m-faizananwar)
+- [Samama Usman](https://github.com/Samama251251)
+- [Faizan Anwar](https://github.com/m-faizananwar)
 
 ---
 
