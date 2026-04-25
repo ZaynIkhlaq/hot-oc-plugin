@@ -82,6 +82,14 @@ class AccountPool {
     console.log(`[HOT] Added account: ${name}`)
   }
 
+  renameAccount(index: number, newName: string): string {
+    const account = this.cfg.accounts[index]!
+    const oldName = account.name
+    account.name = newName
+    writeConfig(this.cfg)
+    return oldName
+  }
+
   removeAccount(index: number): string {
     const [removed] = this.cfg.accounts.splice(index, 1)
     if (this.cfg.current >= this.cfg.accounts.length) this.cfg.current = 0
@@ -92,16 +100,22 @@ class AccountPool {
 
   statusSummary(): string {
     if (this.cfg.accounts.length === 0) {
-      return "No accounts configured. Say \"add a Copilot account\" to get started."
+      return [
+        `  HOT  ·  no accounts`,
+        ``,
+        `  Say "add a Copilot account" to get started.`,
+      ].join("\n")
     }
+    const width = Math.max(...this.all.map((a) => a.name.length))
+    const rows = this.all.map((a, i) => {
+      const dot = i === this.currentIndex ? "●" : "○"
+      const tag = i === this.currentIndex ? "  active" : ""
+      return `  ${dot}  ${a.name.padEnd(width)}${tag}`
+    })
     return [
-      `Active account: ${this.current?.name ?? "none"} (${this.currentIndex + 1} of ${this.count})`,
+      `  HOT  ·  ${this.count} account${this.count === 1 ? "" : "s"}`,
       ``,
-      `All accounts:`,
-      ...this.all.map((a, i) => {
-        const marker = i === this.currentIndex ? " ◀ active" : ""
-        return `  [${i + 1}] ${a.name}${marker}`
-      }),
+      ...rows,
     ].join("\n")
   }
 }
@@ -156,6 +170,38 @@ async function validateCopilot(token: string): Promise<string> {
   if (!userRes.ok) throw new Error(`GitHub returned HTTP ${userRes.status}`)
   const { login } = await userRes.json() as { login: string }
   return login
+}
+
+type CheckResult =
+  | { ok: true; login: string }
+  | { ok: false; reason: "revoked" | "no_copilot" | "network"; detail: string }
+
+async function checkAccount(token: string): Promise<CheckResult> {
+  let login: string
+  try {
+    const userRes = await fetch("https://api.github.com/user", {
+      headers: { Authorization: `token ${token}`, Accept: "application/vnd.github+json" },
+    })
+    if (userRes.status === 401) return { ok: false, reason: "revoked", detail: "token revoked or expired" }
+    if (!userRes.ok) return { ok: false, reason: "network", detail: `GitHub HTTP ${userRes.status}` }
+    login = (await userRes.json() as { login: string }).login
+  } catch (e) {
+    return { ok: false, reason: "network", detail: (e as Error).message }
+  }
+
+  try {
+    const copRes = await fetch("https://api.github.com/copilot_internal/v2/token", {
+      headers: { Authorization: `token ${token}`, Accept: "application/json" },
+    })
+    if (copRes.status === 401 || copRes.status === 403 || copRes.status === 404) {
+      return { ok: false, reason: "no_copilot", detail: `Copilot access denied (HTTP ${copRes.status})` }
+    }
+    if (!copRes.ok) return { ok: false, reason: "network", detail: `Copilot HTTP ${copRes.status}` }
+  } catch (e) {
+    return { ok: false, reason: "network", detail: (e as Error).message }
+  }
+
+  return { ok: true, login }
 }
 
 function openBrowser(url: string): void {
@@ -241,6 +287,75 @@ export const server: Plugin = async () => {
 
           pool.switchTo(target)
           return `Switched to "${pool.current!.name}". Copilot requests will now use this account.`
+        },
+      }),
+
+      hot_check: tool({
+        description: "Validate every configured GitHub Copilot account in parallel. Reports which tokens are still valid and which have been revoked or lost Copilot access.",
+        args: {},
+        execute: async () => {
+          if (pool.count === 0) return `No accounts configured.`
+
+          const results = await Promise.all(pool.all.map((a) => checkAccount(a.token)))
+          const nameWidth = Math.max(...pool.all.map((a) => a.name.length))
+          let okCount = 0
+          let badCount = 0
+
+          const rows = results.map((r, i) => {
+            const a = pool.all[i]!
+            const active = i === pool.currentIndex
+            const name = a.name.padEnd(nameWidth)
+            if (r.ok) {
+              okCount++
+              const right = active ? `@${r.login}  ·  active` : `@${r.login}`
+              return `  ✓  ${name}  ${right}`
+            } else {
+              badCount++
+              const right = active ? `${r.detail}  ·  active` : r.detail
+              return `  ✗  ${name}  ${right}`
+            }
+          })
+
+          const summary = badCount === 0
+            ? `${okCount} valid`
+            : `${okCount} valid  ·  ${badCount} broken`
+
+          return [
+            `  HOT  ·  health check`,
+            ``,
+            ...rows,
+            ``,
+            `  ${summary}`,
+            ...(badCount > 0 ? [`  Use hot_remove to drop bad accounts, hot_add to re-authorize.`] : []),
+          ].join("\n")
+        },
+      }),
+
+      hot_rename: tool({
+        description: "Rename a GitHub Copilot account in HOT. The token and active state are preserved.",
+        args: {
+          account: z.string().describe("Existing account name or 1-based index number to rename."),
+          new_name: z.string().describe("The new nickname for the account."),
+        },
+        execute: async ({ account, new_name }) => {
+          if (pool.count === 0) return `No accounts configured.`
+
+          const idx = parseInt(account, 10)
+          const target = !isNaN(idx) ? idx - 1 : pool.all.findIndex((a) => a.name === account)
+
+          if (target < 0 || target >= pool.count) {
+            return `Unknown account "${account}".\n\n${pool.statusSummary()}`
+          }
+
+          const trimmed = new_name.trim()
+          if (!trimmed) return `New name cannot be empty.`
+          if (pool.all[target]!.name === trimmed) return `Account is already named "${trimmed}".`
+          if (pool.all.some((a, i) => i !== target && a.name === trimmed)) {
+            return `An account named "${trimmed}" already exists. Choose a different name.`
+          }
+
+          const oldName = pool.renameAccount(target, trimmed)
+          return `Renamed "${oldName}" → "${trimmed}".`
         },
       }),
 

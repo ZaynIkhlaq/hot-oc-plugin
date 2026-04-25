@@ -45,6 +45,8 @@ Everything is done through chat — just ask naturally:
 | "Add a Copilot account" | Start adding a new account |
 | "Switch to friend1" | Switch the active account |
 | "Which account am I using?" | See all accounts and which is active |
+| "Rename account 2 to work" | Rename an account |
+| "Check my accounts" | Validate every token, flag any that are revoked |
 | "Remove account 2" | Remove an account |
 
 ---
@@ -54,7 +56,7 @@ Everything is done through chat — just ask naturally:
 - Tokens are stored at `~/.config/opencode/hot.json` (owner-read-only)
 - The GitHub token is long-lived but the internal Copilot bearer token it generates expires every 30 minutes — OpenCode handles the refresh automatically
 - Student Plan Copilot works fine
-- If a token gets revoked, just remove the account and add it again
+- If a token gets revoked, "check my accounts" will surface it — then remove and re-add
 
 ---
 
