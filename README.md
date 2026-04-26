@@ -31,7 +31,6 @@ Inside OpenCode, just say:
 > "Add a Copilot account"
 
 The plugin will open GitHub in your browser and show you a code to enter. Log in as the GitHub account you want to add, enter the code, and authorize it. Once done, tell OpenCode you're finished and it'll save the account automatically.
-
 That's it.
 
 ---
@@ -62,17 +61,11 @@ Everything is done through chat — just ask naturally:
 
 ## Credits
 
-- [Samama Usman](https://github.com/Samama251251)
-- [Faizan Anwar](https://github.com/m-faizananwar)
+- [Samama Usman](https://github.com/Samama251251) for lending me your account.
+- [Faizan Anwar](https://github.com/m-faizananwar) for debugging with me at 2 am.
 
 ---
 
 ## License
 
 MIT
-
----
-
-## Yap
-
-As far as I'm aware, using OpenCode with the models provided through the GitHub Student Plan is probably the best way to use the best models and limits that money can't buy. There may be better hacks out there — ping me if you know one.
