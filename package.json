@@ -1,6 +1,6 @@
 {
   "name": "hot-oc-plugin",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "HOT - Multi-account GitHub Copilot plugin for OpenCode",
   "type": "module",
   "main": "dist/index.js",
@@ -14,7 +14,12 @@
   "scripts": {
     "build": "tsc && chmod +x dist/install.js"
   },
-  "keywords": ["opencode", "copilot", "github", "plugin"],
+  "keywords": [
+    "opencode",
+    "copilot",
+    "github",
+    "plugin"
+  ],
   "license": "MIT",
   "dependencies": {
     "@opencode-ai/plugin": "latest",
